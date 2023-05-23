@@ -97,9 +97,9 @@ class Cube(Entity):
 
 class Leaf(Entity):
 
-    def __init__(self, position: list[float], eulers: list[float]):
+    def __init__(self, position: list[float], eulers: list[float], branch):
         super().__init__(position, eulers, OBJECT_LEAF)
-
+        self.branch = branch
         self.age = 1
 
     def update(self, rate):
@@ -109,7 +109,7 @@ class Leaf(Entity):
         # TODO leaf growing
         scale_factor = 1
         scale_transform = pyrr.matrix44.create_from_scale([scale_factor, scale_factor, scale_factor])
-        mt = scale_transform @ super().get_model_transform() 
+        mt = scale_transform @ super().get_model_transform() @ self.branch.get_model_transform()
         return mt
         
 
@@ -125,22 +125,27 @@ class Branch(Entity):
         self.child = None
         self.leaves = []
 
-    def grow_leaf(self):
-        # Choose a face to grow a leaf out of? Or maybe a vertex. The location here is difficult as it is part of the mesh class
-        # Find the vertex position
-        theta = 360 * random.randint(0, 19) / 20
-        top_face_centre_pos = [self.position[0], self.position[1], self.position[2] + self.height]
-        vertex_pos = [
-            top_face_centre_pos[0] + 0.8 * self.radius * np.sin(np.radians(theta)),
-            top_face_centre_pos[1] + 0.8 * self.radius * np.cos(np.radians(theta)),
-            top_face_centre_pos[2]
+        self.age = 0
+
+    def calculate_leaf_pos(self):
+        theta = 360 * random.randint(0, 19) / 20 # Random angle on the branch to place the leaf
+        branch_space_position = [
+            self.position[0] + 0.8 * np.sin(np.radians(theta)), 
+            self.position[1] + 0.8 * np.cos(np.radians(theta)), 
+            self.position[2] + 4
         ]
+
         eulers = [
-            0,
-            0,
-            theta
+            self.eulers[0],
+            self.eulers[1],
+            self.eulers[2] + theta
         ]
-        self.leaves.append(Leaf(vertex_pos, eulers))
+
+        return branch_space_position, eulers
+
+    def grow_leaf(self):
+        vertex_pos, eulers = self.calculate_leaf_pos()
+        self.leaves.append(Leaf(vertex_pos, eulers, self))
 
     def grow_wider(self, delta: float):
         self.radius += delta
@@ -149,13 +154,14 @@ class Branch(Entity):
         self.height += delta
 
     def update(self, rate):
-        # if self.height < 8:
-        #     self.grow_taller(0.01)
-        #     return None
-        # elif self.radius < 2:
-        #     self.grow_wider(0.01)
-        #     return None
-        if len(self.leaves) < 3:
+        self.age += 1
+        if self.age % 100 == 0:
+            self.grow_taller(0.01)
+            return None
+        elif self.age % 200 == 1:
+            # self.grow_wider(0.01)
+            return None
+        elif self.age % 300 == 1 and len(self.leaves) < 4:
             self.grow_leaf()
             return Event(EVENT_NEW, self.leaves[-1])
 
@@ -227,13 +233,13 @@ class Scene:
         self.renderables[OBJECT_BRANCH] = [
             Branch(
                 position=[0,0,0],
-                eulers=[45,0,0],
+                eulers=[10,0,0],
                 parent=None
             )
         ]
 
         self.camera = Player(
-            position = [-10,0,6],
+            position = [-10,0,4],
             eulers = [0,0,0]
         )
 
