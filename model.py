@@ -101,38 +101,56 @@ class Leaf(Entity):
         super().__init__(position, eulers, OBJECT_LEAF)
         self.branch = branch
         self.age = 1
+        self.dying = False
+
+    def fall_off(self):
+        self.dying = True
 
     def update(self, rate):
-        return None
+        if not self.dying:
+            self.age += 1
+        else:
+            self.age -= 1
+            if self.age == 0:
+                return Event(EVENT_DEL, self)
 
     def get_model_transform(self):
         # TODO leaf growing
-        scale_factor = 1
+        scale_factor = min(0.2, self.age / 1000)
         scale_transform = pyrr.matrix44.create_from_scale([scale_factor, scale_factor, scale_factor])
-        mt = scale_transform @ super().get_model_transform() @ self.branch.get_model_transform()
-        return mt
+        return scale_transform @ super().get_model_transform() 
         
-
-
 class Branch(Entity):
 
-    def __init__(self, position: list[float], eulers: list[float], parent):
+    def __init__(self, position: list[float], eulers: list[float], parent=None, radius=1, height=1):
         super().__init__(position, eulers, OBJECT_BRANCH)
 
-        self.radius = 1
-        self.height = 4
+        self.radius = radius
+        self.height = height
         self.parent = parent
-        self.child = None
+        self.above = None
+        self.split = None
         self.leaves = []
 
         self.age = 0
+        self.depth = self.parent.depth + 1 if self.parent else 1
 
     def calculate_leaf_pos(self):
         theta = 360 * random.randint(0, 19) / 20 # Random angle on the branch to place the leaf
+        
+        base = np.array([
+            BRANCH_TOP_RADIUS * np.sin(np.radians(theta)), 
+            BRANCH_TOP_RADIUS * np.cos(np.radians(theta)), 
+            BRANCH_HEIGHT,
+            1
+        ]).reshape(1, 4)
+
+
+        new_base = base @ self.get_model_transform()
         branch_space_position = [
-            self.position[0] + 0.8 * np.sin(np.radians(theta)), 
-            self.position[1] + 0.8 * np.cos(np.radians(theta)), 
-            self.position[2] + 4
+            new_base[0,0],
+            new_base[0,1],
+            new_base[0,2]
         ]
 
         eulers = [
@@ -142,32 +160,125 @@ class Branch(Entity):
         ]
 
         return branch_space_position, eulers
+    
+    def calculate_extend_pos(self):
+        center_top = np.array([
+            0,
+            0,
+            BRANCH_HEIGHT,
+            1
+        ]).reshape(1, 4)
+
+
+        new_base = center_top @ self.get_model_transform()
+        branch_space_position = [
+            new_base[0,0],
+            new_base[0,1],
+            new_base[0,2]
+        ]
+
+        eulers = [
+            self.eulers[0],
+            self.eulers[1],
+            self.eulers[2]
+        ]
+
+        return branch_space_position, eulers
+    
+    def calculate_split_pos(self):
+        split_pos = np.array([
+            0,
+            BRANCH_SPLIT_Y * self.radius,
+            BRANCH_SPLIT_Z * self.height,
+            1
+        ]).reshape(1, 4)
+
+
+        new_base = split_pos @ self.get_model_transform()
+        branch_space_position = [
+            new_base[0,0],
+            new_base[0,1],
+            new_base[0,2]
+        ]
+        rotation = random.randint(0, 20) * 18
+        eulers = [
+            self.eulers[0] + BRANCH_SPLIT_X_ROTATION,
+            self.eulers[1],
+            self.eulers[2] + rotation
+        ]
+
+        return branch_space_position, eulers
 
     def grow_leaf(self):
         vertex_pos, eulers = self.calculate_leaf_pos()
         self.leaves.append(Leaf(vertex_pos, eulers, self))
 
-    def grow_wider(self, delta: float):
-        self.radius += delta
+    def grow_branch(self):
+        vertex_pos, eulers = self.calculate_extend_pos()
+        self.above = Branch(vertex_pos, eulers, parent=self, radius = 0, height=0)
 
-    def grow_taller(self, delta: float):
-        self.height += delta
+    def split_branch(self):
+        vertex_pos, eulers = self.calculate_split_pos()
+        self.split = Branch(vertex_pos, eulers, parent=self, radius=0, height=0)
 
-    def update(self, rate):
-        self.age += 1
-        if self.age % 100 == 0:
-            self.grow_taller(0.01)
-            return None
-        elif self.age % 200 == 1:
-            # self.grow_wider(0.01)
-            return None
-        elif self.age % 300 == 1 and len(self.leaves) < 4:
+    def attempt_split(self):
+        if self.split == None:
+            if self.depth < MAX_DEPTH and random.random() < self.depth / 10:
+                self.split_branch()
+                return True
+            else:
+                self.split = -1
+        elif self.split == -1:
+            if self.depth > MAX_DEPTH * 0.75:
+                self.split = None
+        return False
+        
+
+    def attempt_extend(self):
+        if self.height < 1:
+            self.height += 0.001
+        elif self.above == None and self.radius > MIN_EXTEND_RADIUS and self.depth < MAX_DEPTH:
+            self.height = 1
+            self.grow_branch()
+            return True
+        
+        return False
+    
+    def attempt_grow_leaf(self):
+        if self.radius < LEAF_GROWING_MAX_RADIUS and len(self.leaves) < (1 / self.radius) and self.above:
             self.grow_leaf()
+            return True
+        return False
+
+    def attempt_grow_wider(self):
+        if self.parent == None:
+            # base of tree
+            self.radius += 0.00001
+        if self.radius > LEAF_GROWING_MAX_RADIUS and len(self.leaves) != 0:
+            self.leaves.pop().fall_off()
+        if self.split != None and self.split != -1:
+            self.split.radius = self.radius * BRANCH_SPLIT_RADIUS
+        if self.above != None:
+            self.above.radius = self.radius * BRANCH_TOP_RADIUS
+
+    
+    def update(self, rate):
+        self.attempt_grow_wider()
+
+        if self.attempt_extend():
+            return Event(EVENT_NEW, self.above)
+        
+        # If radius is large, no branching. Small radius, high branching
+        if self.attempt_split():
+            return Event(EVENT_NEW, self.split)
+
+        if self.attempt_grow_leaf():
             return Event(EVENT_NEW, self.leaves[-1])
 
+        
     def get_model_transform(self):
-        return pyrr.matrix44.create_from_scale([self.radius, self.radius, self.height / 4.0]) @ super().get_model_transform()
-
+        return pyrr.matrix44.create_from_scale([self.radius, self.radius, self.height]) @ super().get_model_transform()
+        
 class Player(Entity):
     """ A first person camera controller. """
 
@@ -233,8 +344,8 @@ class Scene:
         self.renderables[OBJECT_BRANCH] = [
             Branch(
                 position=[0,0,0],
-                eulers=[10,0,0],
-                parent=None
+                eulers=[0,0,0],
+                radius = 0.1
             )
         ]
 
@@ -266,6 +377,9 @@ class Scene:
                     self.renderables[entity.objectType].append(entity)
                 else:
                     self.renderables[entity.objectType] = [entity]
+            if event.type == EVENT_DEL:
+                entity = event.data
+                self.renderables[entity.objectType].remove(entity)
         
         self.camera.update()
 
