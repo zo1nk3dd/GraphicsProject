@@ -47,8 +47,8 @@ class Renderer:
         """
 
         self.meshes: dict[int, Mesh] = {
-            OBJECT_LEAF: ObjMesh("models/leaf.obj"),
-            OBJECT_BRANCH: ObjMesh("models/branch.obj"),
+            OBJECT_LEAF: InstancedObjMesh("models/leaf.obj"),
+            OBJECT_BRANCH: InstancedObjMesh("models/branch.obj"),
             OBJECT_CUBE: ObjMesh("models/cube.obj"),
             OBJECT_SKY: Quad2D(
                 center = (0,0),
@@ -167,13 +167,13 @@ class Renderer:
             material = self.materials[objectType]
             glBindVertexArray(mesh.vao)
             material.use()
+            transforms = []
             for object in objectList:
-                glUniformMatrix4fv(
-                    self.modelMatrixLocation,
-                    1,GL_FALSE,
-                    object.get_model_transform()
-                )
-                glDrawArrays(GL_TRIANGLES, 0, mesh.vertex_count)
+                transforms.append(object.get_model_transform())
+            mesh.send_instance_data(np.array(transforms, dtype=np.float32))
+           
+            glBindVertexArray(mesh.vao)
+            glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.vertex_count, len(transforms))
 
         glFlush()
 
@@ -234,19 +234,29 @@ class InstancedObjMesh(ObjMesh):
     def __init__(self, filename):
         super().__init__(filename)
 
-        instance_offsets = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0], [10, 10, 0]], dtype=np.float32)
-
-
         self.vbo_instance = glGenBuffers(1)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_instance)
-        glBufferData(GL_ARRAY_BUFFER, instance_offsets.nbytes, instance_offsets, GL_STATIC_DRAW)
 
+    def send_instance_data(self, data):
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_instance)
+        glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_STATIC_DRAW)
+
+        glBindVertexArray(self.vao)
         # Instances
         glEnableVertexAttribArray(3)
-        glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 64, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(4)
+        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 64, ctypes.c_void_p(16))
+        glEnableVertexAttribArray(5)
+        glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, 64, ctypes.c_void_p(32))
+        glEnableVertexAttribArray(6)
+        glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, 64, ctypes.c_void_p(48))
 
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
         glVertexAttribDivisor(3, 1)
+        glVertexAttribDivisor(4, 1)
+        glVertexAttribDivisor(5, 1)
+        glVertexAttribDivisor(6, 1)
+
+        glBindVertexArray(0)
 
 class Quad2D(Mesh):
 
